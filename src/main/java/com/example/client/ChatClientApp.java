@@ -22,14 +22,36 @@ public class ChatClientApp extends Application {
 
     @Override
     public void start(Stage primaryStage) {
-        // Prompt for a username before building the main UI
-        username = askForUsername();
+        // Prompt user: choose Login or Register
+        String authMode = askLoginOrRegister();
+        if (authMode == null) {
+            System.out.println("User canceled login/register. Exiting...");
+            Platform.exit();
+            return;
+        }
+
+        // Prompt for username & password
+        username = askForCredential("Username:", "John");
         if (username == null || username.isBlank()) {
             System.out.println("No username provided. Exiting...");
             Platform.exit();
             return;
         }
+        String password = askForCredential("Password:", "");
+        if (password == null || password.isBlank()) {
+            System.out.println("No password provided. Exiting...");
+            Platform.exit();
+            return;
+        }
 
+        // Connect to server & send LOGIN or REGISTER command
+        if (!connectAndAuthenticate("localhost", 12345, authMode, username, password)) {
+            // If auth fails, exit or do something else
+            Platform.exit();
+            return;
+        }
+
+        // Build the Chat UI
         chatArea = new TextArea();
         chatArea.setEditable(false);
         chatArea.setWrapText(true);
@@ -39,7 +61,6 @@ public class ChatClientApp extends Application {
 
         Button sendButton = new Button("Send");
         sendButton.setOnAction(e -> sendMessage());
-        // Also send on Enter key
         inputField.setOnAction(e -> sendMessage());
 
         HBox inputBox = new HBox(10, inputField, sendButton);
@@ -51,80 +72,116 @@ public class ChatClientApp extends Application {
         primaryStage.setTitle("JavaFX Chat Client - " + username);
         primaryStage.show();
 
-        // Connect to server
-        connectToServer("localhost", 12345);
+        // Start reading messages in background thread
+        startReaderThread();
     }
 
     /**
-     * Simple method to prompt user for a username using a JavaFX TextInputDialog.
+     *  Ask user: do you want to LOGIN or REGISTER?
      */
-    private String askForUsername() {
-        TextInputDialog dialog = new TextInputDialog("John");
-        dialog.setTitle("Set Username");
-        dialog.setHeaderText("Choose a username");
-        dialog.setContentText("Username:");
-        // showAndWait() returns an Optional<String>
+    private String askLoginOrRegister() {
+        ChoiceDialog<String> dialog = new ChoiceDialog<>("LOGIN", "LOGIN", "REGISTER");
+        dialog.setTitle("Login or Register");
+        dialog.setHeaderText("Choose an action");
+        dialog.setContentText("Select one:");
         Optional<String> result = dialog.showAndWait();
         return result.orElse(null);
     }
 
-    private void handleIncomingMessage(String rawMessage) {
-        // Check if it starts with the local user's name, e.g. "John: "
-        String prefix = username + ": ";
-        if (rawMessage.startsWith(prefix)) {
-            // Rewrite "<username>: Hello" as "You: Hello"
-            String withoutName = rawMessage.substring(prefix.length()); // "Hello"
-            chatArea.appendText("You: " + withoutName + "\n");
-        } else {
-            // It's from someone else; show it unchanged
-            chatArea.appendText(rawMessage + "\n");
-        }
+    /**
+     *  Prompt user for either username or password using a TextInputDialog.
+     */
+    private String askForCredential(String label, String defaultVal) {
+        TextInputDialog dialog = new TextInputDialog(defaultVal);
+        dialog.setTitle("Enter " + label);
+        dialog.setHeaderText(label);
+        dialog.setContentText(label + ":");
+        Optional<String> result = dialog.showAndWait();
+        return result.orElse(null);
     }
 
-    private void connectToServer(String host, int port) {
+    /**
+     * Attempt to connect to the server and perform either LOGIN or REGISTER.
+     * Returns true if AUTH_OK, or false if fail.
+     */
+    private boolean connectAndAuthenticate(String host, int port,
+                                           String authMode, String user, String pass) {
         try {
             socket = new Socket(host, port);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             out = new PrintWriter(socket.getOutputStream(), true);
 
-            // Continuously read messages from server
-            Thread readerThread = new Thread(() -> {
-                try {
-                    String message;
-                    while ((message = in.readLine()) != null) {
-                        final String msg = message;
-                        // Append as is
-                        Platform.runLater(() -> handleIncomingMessage(msg));
-                    }
-                } catch (IOException e) {
-                    e.printStackTrace();
-                    showError("Connection lost: " + e.getMessage());
-                }
-            });
-            readerThread.setDaemon(true);
-            readerThread.start();
+            // Send "LOGIN <user> <pass>" or "REGISTER <user> <pass>" as first line
+            out.println(authMode + " " + user + " " + pass);
+
+            // Wait for response from server
+            String response = in.readLine();
+            if (response == null) {
+                System.err.println("Server closed connection unexpectedly.");
+                return false;
+            }
+            if (response.startsWith("AUTH_OK")) {
+                System.out.println("Authentication successful!");
+                return true;
+            } else {
+                System.err.println("Authentication failed: " + response);
+                return false;
+            }
 
         } catch (IOException e) {
             e.printStackTrace();
             showError("Could not connect to server: " + e.getMessage());
+            return false;
         }
     }
 
     /**
-     * Send the contents of inputField to the server, prefixed with the username.
+     *  Once authenticated, start a background thread to read messages.
+     */
+    private void startReaderThread() {
+        Thread readerThread = new Thread(() -> {
+            try {
+                String message;
+                while ((message = in.readLine()) != null) {
+                    final String msg = message;
+                    Platform.runLater(() -> handleIncomingMessage(msg));
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+                showError("Connection lost: " + e.getMessage());
+            }
+        });
+        readerThread.setDaemon(true);
+        readerThread.start();
+    }
+
+    /**
+     *  If the incoming message starts with "<username>:", rewrite to "You:".
+     */
+    private void handleIncomingMessage(String rawMessage) {
+        String prefix = username + ": ";
+        if (rawMessage.startsWith(prefix)) {
+            String withoutName = rawMessage.substring(prefix.length());
+            chatArea.appendText("You: " + withoutName + "\n");
+        } else {
+            chatArea.appendText(rawMessage + "\n");
+        }
+    }
+
+    /**
+     *  Send a normal chat message with "<username>: <text>" format.
      */
     private void sendMessage() {
         String text = inputField.getText().trim();
         if (text.isEmpty()) return;
 
-        // Send "Username: Message" to the server
-        out.println(username + ": " + text);
-
+        out.println(text);
         inputField.clear();
     }
 
     private void showError(String message) {
-        chatArea.appendText("[Error] " + message + "\n");
+        // We can also show a dialog, but for simplicity just append to chatArea
+        Platform.runLater(() -> chatArea.appendText("[Error] " + message + "\n"));
     }
 
     @Override

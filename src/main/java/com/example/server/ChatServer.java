@@ -9,12 +9,19 @@ import java.util.List;
 public class ChatServer {
     private ServerSocket serverSocket;
     private final List<ClientHandler> clients;
+    private MongoService mongoService;
 
     // Constructor
     public ChatServer(int port) throws IOException {
         serverSocket = new ServerSocket(port);
         clients = Collections.synchronizedList(new ArrayList<>());
+        mongoService = new MongoService(); // Connect to Mongo
+
         System.out.println("Server started on port " + port);
+    }
+
+    public MongoService getMongoService() {
+        return mongoService;
     }
 
     public void start() {
@@ -63,6 +70,7 @@ class ClientHandler implements Runnable {
     private ChatServer server;
     private PrintWriter out;
     private BufferedReader in;
+    private String username; // store after successful login
 
     public ClientHandler(Socket socket, ChatServer server) {
         this.socket = socket;
@@ -75,9 +83,19 @@ class ClientHandler implements Runnable {
             out = new PrintWriter(socket.getOutputStream(), true);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 
+            // 1. Authentication flow
+            if (!handleAuth()) {
+                // If auth fails, close connection
+                closeConnections();
+                return;
+            }
+
+            // 2. If we get here, user is authenticated
+            // We enter the main chat loop
             String message;
             while ((message = in.readLine()) != null) {
-                server.broadcast(message);
+                // broadcast, store in DB, etc.
+                server.broadcast(username + ": " + message);
             }
         } catch (IOException e) {
             e.printStackTrace();
@@ -85,6 +103,54 @@ class ClientHandler implements Runnable {
             server.removeClient(this);
             closeConnections();
         }
+    }
+
+    /**
+     * Reads the first line from the client, expecting:
+     *   "REGISTER <username> <password>"
+     * or "LOGIN <username> <password>"
+     * If successful, we set this.username and return true.
+     */
+    private boolean handleAuth() throws IOException {
+        String line = in.readLine();
+        if (line == null) {
+            return false;
+        }
+        String[] parts = line.split("\\s+", 3);
+        if (parts.length < 3) {
+            out.println("AUTH_FAIL Missing parts");
+            return false;
+        }
+        String command = parts[0].toUpperCase();
+        String user = parts[1];
+        String pass = parts[2];
+
+        if (command.equals("REGISTER")) {
+            if (server.getMongoService().registerUser(user, pass)) {
+                out.println("AUTH_OK");
+                this.username = user;
+                return true;
+            } else {
+                out.println("AUTH_FAIL Username exists");
+                return false;
+            }
+        } else if (command.equals("LOGIN")) {
+            if (server.getMongoService().loginUser(user, pass)) {
+                out.println("AUTH_OK");
+                this.username = user;
+                return true;
+            } else {
+                out.println("AUTH_FAIL Invalid credentials");
+                return false;
+            }
+        } else {
+            out.println("AUTH_FAIL Unknown command");
+            return false;
+        }
+    }
+
+    public void sendMessage(String msg) {
+        out.println(msg);
     }
 
     private void closeConnections() {
@@ -95,9 +161,5 @@ class ClientHandler implements Runnable {
         } catch (IOException e) {
             e.printStackTrace();
         }
-    }
-
-    public void sendMessage(String message) {
-        out.println(message);
     }
 }
