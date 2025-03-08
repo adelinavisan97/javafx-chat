@@ -4,6 +4,7 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import io.github.cdimascio.dotenv.Dotenv;
 import org.bson.Document;
 import org.mindrot.jbcrypt.BCrypt;
 
@@ -15,7 +16,9 @@ public class MongoService {
 
     public MongoService() {
         // Connect to local MongoDB on default port 27017
-        mongoClient = MongoClients.create("mongodb+srv://testUser:6Z1cvtHaepsgxaxi@myatlasclusteredu.ipecla6.mongodb.net/?retryWrites=true&w=majority&appName=myAtlasClusterEDU");
+        Dotenv dotenv = Dotenv.configure().load();
+        String mongoUrl = dotenv.get("MONGO_URI");
+        mongoClient = MongoClients.create(mongoUrl);
         database = mongoClient.getDatabase("chatApp");
 
         // "users" collection for user credentials
