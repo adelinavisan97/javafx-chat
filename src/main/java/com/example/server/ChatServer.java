@@ -70,7 +70,8 @@ class ClientHandler implements Runnable {
     private ChatServer server;
     private PrintWriter out;
     private BufferedReader in;
-    private String username; // store after successful login
+    private String username; // email used for authentication
+    private String fullName; // full name for display
 
     public ClientHandler(Socket socket, ChatServer server) {
         this.socket = socket;
@@ -83,19 +84,16 @@ class ClientHandler implements Runnable {
             out = new PrintWriter(socket.getOutputStream(), true);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 
-            // 1. Authentication flow
+            // Authentication flow
             if (!handleAuth()) {
-                // If auth fails, close connection
                 closeConnections();
                 return;
             }
 
-            // 2. If we get here, user is authenticated
-            // We enter the main chat loop
+            // Main chat loop: broadcast incoming messages with the full name as prefix.
             String message;
             while ((message = in.readLine()) != null) {
-                // broadcast, store in DB, etc.
-                server.broadcast(username + ": " + message);
+                server.broadcast(fullName + ": " + message);
             }
         } catch (IOException e) {
             e.printStackTrace();
@@ -106,45 +104,67 @@ class ClientHandler implements Runnable {
     }
 
     /**
-     * Reads the first line from the client, expecting:
-     *   "REGISTER <username> <password>"
-     * or "LOGIN <username> <password>"
-     * If successful, we set this.username and return true.
+     * Reads the first line from the client.
+     * For registration, expects:
+     *   "REGISTER|<fullName>|<email>|<password>"
+     * For login, expects:
+     *   "LOGIN|<email>|<password>"
+     * On success, sends back "AUTH_OK|<fullName>"
      */
     private boolean handleAuth() throws IOException {
         String line = in.readLine();
         if (line == null) {
             return false;
         }
-        String[] parts = line.split("\\s+", 3);
+        // Split using pipe as delimiter
+        String[] parts = line.split("\\|");
         if (parts.length < 3) {
-            out.println("AUTH_FAIL Missing parts");
+            out.println("AUTH_FAIL|Missing parts");
             return false;
         }
         String command = parts[0].toUpperCase();
-        String user = parts[1];
-        String pass = parts[2];
-
         if (command.equals("REGISTER")) {
-            if (server.getMongoService().registerUser(user, pass)) {
-                out.println("AUTH_OK");
-                this.username = user;
+            if (parts.length != 4) {
+                out.println("AUTH_FAIL|Incorrect registration format");
+                return false;
+            }
+            String regFullName = parts[1].trim();
+            String email = parts[2].trim();
+            String pass = parts[3].trim();
+            if (server.getMongoService().registerUser(email, pass, regFullName)) {
+                // Set both username and fullName
+                this.username = email;
+                this.fullName = regFullName;
+                // Send the full name back to the client
+                out.println("AUTH_OK|" + regFullName);
                 return true;
             } else {
-                out.println("AUTH_FAIL Username exists");
+                out.println("AUTH_FAIL|Username exists");
                 return false;
             }
         } else if (command.equals("LOGIN")) {
-            if (server.getMongoService().loginUser(user, pass)) {
-                out.println("AUTH_OK");
-                this.username = user;
+            if (parts.length != 3) {
+                out.println("AUTH_FAIL|Incorrect login format");
+                return false;
+            }
+            String email = parts[1].trim();
+            String pass = parts[2].trim();
+            if (server.getMongoService().loginUser(email, pass)) {
+                // Retrieve full name from the database
+                String retrievedFullName = server.getMongoService().getFullName(email);
+                if (retrievedFullName == null) {
+                    retrievedFullName = email; // fallback
+                }
+                this.username = email;
+                this.fullName = retrievedFullName;
+                out.println("AUTH_OK|" + retrievedFullName);
                 return true;
             } else {
-                out.println("AUTH_FAIL Invalid credentials");
+                out.println("AUTH_FAIL|Invalid credentials");
                 return false;
             }
         } else {
-            out.println("AUTH_FAIL Unknown command");
+            out.println("AUTH_FAIL|Unknown command");
             return false;
         }
     }
@@ -163,3 +183,4 @@ class ClientHandler implements Runnable {
         }
     }
 }
+
