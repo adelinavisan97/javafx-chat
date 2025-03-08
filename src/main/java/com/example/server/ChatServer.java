@@ -40,13 +40,16 @@ public class ChatServer {
         }
     }
 
-    // Broadcast message to all clients
-    public void broadcast(String message) {
+    // Find a specific client based on username (email)
+    public ClientHandler getClientByUsername(String username) {
         synchronized (clients) {
             for (ClientHandler client : clients) {
-                client.sendMessage(message);
+                if (client.getUsername().equals(username)) {
+                    return client;
+                }
             }
         }
+        return null;
     }
 
     // Remove client if disconnected
@@ -90,10 +93,9 @@ class ClientHandler implements Runnable {
                 return;
             }
 
-            // Main chat loop: broadcast incoming messages with the full name as prefix.
             String message;
             while ((message = in.readLine()) != null) {
-                server.broadcast(fullName + ": " + message);
+                handleClientMessage(message);
             }
         } catch (IOException e) {
             e.printStackTrace();
@@ -116,12 +118,13 @@ class ClientHandler implements Runnable {
         if (line == null) {
             return false;
         }
-        // Split using pipe as delimiter
+
         String[] parts = line.split("\\|");
         if (parts.length < 3) {
             out.println("AUTH_FAIL|Missing parts");
             return false;
         }
+
         String command = parts[0].toUpperCase();
         if (command.equals("REGISTER")) {
             if (parts.length != 4) {
@@ -131,11 +134,10 @@ class ClientHandler implements Runnable {
             String regFullName = parts[1].trim();
             String email = parts[2].trim();
             String pass = parts[3].trim();
+
             if (server.getMongoService().registerUser(email, pass, regFullName)) {
-                // Set both username and fullName
                 this.username = email;
                 this.fullName = regFullName;
-                // Send the full name back to the client
                 out.println("AUTH_OK|" + regFullName);
                 return true;
             } else {
@@ -149,15 +151,11 @@ class ClientHandler implements Runnable {
             }
             String email = parts[1].trim();
             String pass = parts[2].trim();
+
             if (server.getMongoService().loginUser(email, pass)) {
-                // Retrieve full name from the database
-                String retrievedFullName = server.getMongoService().getFullName(email);
-                if (retrievedFullName == null) {
-                    retrievedFullName = email; // fallback
-                }
-                this.username = email;
-                this.fullName = retrievedFullName;
-                out.println("AUTH_OK|" + retrievedFullName);
+                this.username = email.toLowerCase();
+                this.fullName = server.getMongoService().getFullName(email);
+                out.println("AUTH_OK|" + fullName);
                 return true;
             } else {
                 out.println("AUTH_FAIL|Invalid credentials");
@@ -169,8 +167,75 @@ class ClientHandler implements Runnable {
         }
     }
 
+    /**
+     * Handles messages received from the client.
+     * - "NEW_CHAT|<recipientEmail>"
+     * - "SEND_MESSAGE|<conversationId>|<message>"
+     */
+    private void handleClientMessage(String message) {
+        String[] parts = message.split("\\|", 3);
+        String command = parts[0];
+
+        if (command.equals("NEW_CHAT")) {
+            String recipientEmail = parts[1].trim();
+
+            // 1) Check if this user actually exists
+            if (!server.getMongoService().userExists(recipientEmail)) {
+                // If not found, inform the sender client
+                out.println("CHAT_FAIL|UserNotFound");
+                return; // do not create a conversation
+            }
+
+            // 2) If user does exist, proceed
+            String conversationId = server.getMongoService().createOrGetConversation(username, recipientEmail);
+            out.println("CHAT_STARTED|" + conversationId);
+        } else if (command.equals("SEND_MESSAGE")) {
+            if (parts.length < 3) return;
+            String conversationId = parts[1];
+            String msgContent = parts[2];
+
+            try {
+                // Encrypt message (throws Exception)
+                String encryptedMessage = CryptoUtil.encrypt(msgContent);
+
+                // Store the encrypted message in MongoDB
+                server.getMongoService().saveMessage(conversationId, username, encryptedMessage);
+
+                // Send a real-time notification to the recipient if they are online
+                String recipientEmail = server.getMongoService().getRecipientFromConversation(conversationId, username);
+                ClientHandler recipientHandler = server.getClientByUsername(recipientEmail);
+                if (recipientHandler != null) {
+                    // We send the plain text back to recipient, or you can send the encrypted if you prefer
+                    recipientHandler.sendMessage("NEW_MESSAGE|" + fullName + "|" + msgContent);
+                }
+            } catch (Exception ex) {
+                ex.printStackTrace();
+                // Optionally notify the sender of the error:
+                out.println("ERROR|Encryption failed on server side.");
+            }
+
+        } else if (command.equals("GET_MESSAGES")) {
+            String conversationId = parts[1];
+            List<String> messages = server.getMongoService().getMessages(conversationId, username);
+            for (String line : messages) {
+                out.println("MESSAGE_HISTORY|" + line);
+            }
+        } else if (command.equals("LIST_CONVERSATIONS")) {
+            System.out.println("[DEBUG] LIST_CONVERSATIONS for: " + username);
+            List<String> userConversations = server.getMongoService().getAllConversationsForUser(username.toLowerCase());
+            System.out.println("[DEBUG] Found these convos: " + userConversations);
+            for (String conversationId : userConversations) {
+                out.println("CONVERSATION|" + conversationId);
+            }
+        }
+    }
+
     public void sendMessage(String msg) {
         out.println(msg);
+    }
+
+    public String getUsername() {
+        return username;
     }
 
     private void closeConnections() {
@@ -183,4 +248,3 @@ class ClientHandler implements Runnable {
         }
     }
 }
-
