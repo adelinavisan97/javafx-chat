@@ -23,7 +23,7 @@ public class ChatClientApp extends Application {
     private Scene chatScene;          // a single conversation’s chat
 
     // For conversation listing
-    private ListView<String> conversationListView;
+    private ListView<ConversationListItem> conversationListView;
 
     // For chat UI
     private TextArea chatArea;
@@ -180,28 +180,31 @@ public class ChatClientApp extends Application {
      * open the selected conversation in conversationListView
      */
     private void openSelectedConversation() {
-        String selected = conversationListView.getSelectionModel().getSelectedItem();
-        if (selected == null) {
+        ConversationListItem selectedItem = conversationListView.getSelectionModel().getSelectedItem();
+        if (selectedItem == null) {
             showAlert("Please select a conversation first.");
             return;
         }
-        currentConversationId = selected;
+        // now we can do:
+        String convId = selectedItem.getConversationId();
+        String displayNameForUser = selectedItem.getDisplayName();
 
-        // Build and set the chat scene
+        currentConversationId = convId;
+
         chatScene = buildChatScene();
         primaryStage.setScene(chatScene);
-        primaryStage.setTitle("Conversation: " + currentConversationId);
+        primaryStage.setTitle(displayNameForUser);
 
-        // Request messages from server
-        out.println("GET_MESSAGES|" + currentConversationId);
+        out.println("GET_MESSAGES|" + convId);
     }
+
 
     /**
      * After successful login or register, we load the conversation list
      */
     private void loadConversationsList() {
         conversationListView.getItems().clear();
-        out.println("LIST_CONVERSATIONS"); // server returns "CONVERSATION|<id>" lines
+        out.println("LIST_USER_CONVERSATIONS"); // server returns "CONVERSATION|<id>" lines
     }
 
     /**
@@ -348,20 +351,17 @@ public class ChatClientApp extends Application {
         String command = parts[0];
 
         switch (command) {
-            case "CONVERSATION": {
-                if (parts.length >= 2) {
+            case "MY_CONVO": {
+                // "MY_CONVO|<convId>|<displayName>"
+                if (parts.length >= 3) {
                     String convId = parts[1];
-                    System.out.println("Got conversation ID: " + convId);
-                    conversationListView.getItems().add(convId);
-                }
-                break;
-            }
-            case "CHAT_STARTED": {
-                // "CHAT_STARTED|<id>"
-                if (parts.length >= 2) {
-                    String convId = parts[1];
-                    conversationListView.getItems().add(convId);
-                    showAlert("New conversation started: " + convId);
+                    String dispName = parts[2];
+
+                    // Create a new ConversationListItem object
+                    ConversationListItem item = new ConversationListItem(convId, dispName);
+
+                    // Add the object itself to the ListView
+                    conversationListView.getItems().add(item);
                 }
                 break;
             }

@@ -11,12 +11,10 @@ public class ChatServer {
     private final List<ClientHandler> clients;
     private MongoService mongoService;
 
-    // Constructor
     public ChatServer(int port) throws IOException {
         serverSocket = new ServerSocket(port);
         clients = Collections.synchronizedList(new ArrayList<>());
-        mongoService = new MongoService(); // Connect to Mongo
-
+        mongoService = new MongoService(); // connect to Mongo
         System.out.println("Server started on port " + port);
     }
 
@@ -44,7 +42,7 @@ public class ChatServer {
     public ClientHandler getClientByUsername(String username) {
         synchronized (clients) {
             for (ClientHandler client : clients) {
-                if (client.getUsername().equals(username)) {
+                if (client.getUsername().equalsIgnoreCase(username)) {
                     return client;
                 }
             }
@@ -87,7 +85,6 @@ class ClientHandler implements Runnable {
             out = new PrintWriter(socket.getOutputStream(), true);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 
-            // Authentication flow
             if (!handleAuth()) {
                 closeConnections();
                 return;
@@ -106,18 +103,11 @@ class ClientHandler implements Runnable {
     }
 
     /**
-     * Reads the first line from the client.
-     * For registration, expects:
-     *   "REGISTER|<fullName>|<email>|<password>"
-     * For login, expects:
-     *   "LOGIN|<email>|<password>"
-     * On success, sends back "AUTH_OK|<fullName>"
+     * Auth flow for REGISTER or LOGIN.
      */
     private boolean handleAuth() throws IOException {
         String line = in.readLine();
-        if (line == null) {
-            return false;
-        }
+        if (line == null) return false;
 
         String[] parts = line.split("\\|");
         if (parts.length < 3) {
@@ -132,7 +122,7 @@ class ClientHandler implements Runnable {
                 return false;
             }
             String regFullName = parts[1].trim();
-            String email = parts[2].trim();
+            String email = parts[2].trim().toLowerCase();
             String pass = parts[3].trim();
 
             if (server.getMongoService().registerUser(email, pass, regFullName)) {
@@ -144,16 +134,17 @@ class ClientHandler implements Runnable {
                 out.println("AUTH_FAIL|Username exists");
                 return false;
             }
-        } else if (command.equals("LOGIN")) {
+        }
+        else if (command.equals("LOGIN")) {
             if (parts.length != 3) {
                 out.println("AUTH_FAIL|Incorrect login format");
                 return false;
             }
-            String email = parts[1].trim();
+            String email = parts[1].trim().toLowerCase();
             String pass = parts[2].trim();
 
             if (server.getMongoService().loginUser(email, pass)) {
-                this.username = email.toLowerCase();
+                this.username = email;
                 this.fullName = server.getMongoService().getFullName(email);
                 out.println("AUTH_OK|" + fullName);
                 return true;
@@ -161,71 +152,87 @@ class ClientHandler implements Runnable {
                 out.println("AUTH_FAIL|Invalid credentials");
                 return false;
             }
-        } else {
+        }
+        else {
             out.println("AUTH_FAIL|Unknown command");
             return false;
         }
     }
 
-    /**
-     * Handles messages received from the client.
-     * - "NEW_CHAT|<recipientEmail>"
-     * - "SEND_MESSAGE|<conversationId>|<message>"
-     */
     private void handleClientMessage(String message) {
+        // We can safely split only on the first one or two pipes for many commands
         String[] parts = message.split("\\|", 3);
         String command = parts[0];
 
         if (command.equals("NEW_CHAT")) {
-            String recipientEmail = parts[1].trim();
+            if (parts.length < 2) return;
+            String recipientEmail = parts[1].toLowerCase();
 
-            // 1) Check if this user actually exists
+            // 1) check user existence
             if (!server.getMongoService().userExists(recipientEmail)) {
-                // If not found, inform the sender client
                 out.println("CHAT_FAIL|UserNotFound");
-                return; // do not create a conversation
+                return;
             }
-
-            // 2) If user does exist, proceed
+            // 2) create or get conversation
             String conversationId = server.getMongoService().createOrGetConversation(username, recipientEmail);
+
+            // 3) compute display names for each side
+            String myFullName = server.getMongoService().getFullName(username);
+            String theirFullName = server.getMongoService().getFullName(recipientEmail);
+
+            String myDisplayName = "Conversation with " + (theirFullName != null ? theirFullName : recipientEmail);
+            String theirDisplayName = "Conversation with " + (myFullName != null ? myFullName : username);
+
+            // 4) update each user doc with references
+            server.getMongoService().addConversationToUser(username, conversationId, myDisplayName);
+            server.getMongoService().addConversationToUser(recipientEmail, conversationId, theirDisplayName);
+
+            // 5) send "CHAT_STARTED|<id>"
             out.println("CHAT_STARTED|" + conversationId);
-        } else if (command.equals("SEND_MESSAGE")) {
+        }
+        else if (command.equals("LIST_USER_CONVERSATIONS")) {
+            // fetch from user doc
+            List<ConvRef> userConvos = server.getMongoService().getUserConversations(username);
+            // for each, send "MY_CONVO|conversationId|displayName"
+            for (ConvRef c : userConvos) {
+                out.println("MY_CONVO|" + c.getConversationId() + "|" + c.getDisplayName());
+            }
+        }
+        else if (command.equals("SEND_MESSAGE")) {
             if (parts.length < 3) return;
             String conversationId = parts[1];
             String msgContent = parts[2];
 
             try {
-                // Encrypt message (throws Exception)
-                String encryptedMessage = CryptoUtil.encrypt(msgContent);
+                String encrypted = CryptoUtil.encrypt(msgContent);
+                server.getMongoService().saveMessage(conversationId, username, encrypted);
 
-                // Store the encrypted message in MongoDB
-                server.getMongoService().saveMessage(conversationId, username, encryptedMessage);
-
-                // Send a real-time notification to the recipient if they are online
+                // notify other user in real-time
                 String recipientEmail = server.getMongoService().getRecipientFromConversation(conversationId, username);
                 ClientHandler recipientHandler = server.getClientByUsername(recipientEmail);
                 if (recipientHandler != null) {
-                    // We send the plain text back to recipient, or you can send the encrypted if you prefer
+                    // plain text to the other side
                     recipientHandler.sendMessage("NEW_MESSAGE|" + fullName + "|" + msgContent);
                 }
             } catch (Exception ex) {
                 ex.printStackTrace();
-                // Optionally notify the sender of the error:
-                out.println("ERROR|Encryption failed on server side.");
+                out.println("ERROR|Encryption failed on server side");
             }
-
-        } else if (command.equals("GET_MESSAGES")) {
+        }
+        else if (command.equals("GET_MESSAGES")) {
+            if (parts.length < 2) return;
             String conversationId = parts[1];
-            List<String> messages = server.getMongoService().getMessages(conversationId, username);
-            for (String line : messages) {
+            List<String> lines = server.getMongoService().getMessages(conversationId, username);
+            for (String line : lines) {
                 out.println("MESSAGE_HISTORY|" + line);
             }
-        } else if (command.equals("LIST_CONVERSATIONS")) {
-            System.out.println("[DEBUG] LIST_CONVERSATIONS for: " + username);
-            List<String> userConversations = server.getMongoService().getAllConversationsForUser(username.toLowerCase());
-            System.out.println("[DEBUG] Found these convos: " + userConversations);
-            for (String conversationId : userConversations) {
-                out.println("CONVERSATION|" + conversationId);
+        }
+        else if (command.equals("SEARCH_USERS")) {
+            if (parts.length < 2) return;
+            String prefix = parts[1].toLowerCase();
+            List<UserRecord> results = server.getMongoService().searchUsersByPrefix(prefix);
+            for (UserRecord r : results) {
+                out.println("USER_RESULT|" + r.getEmail() + "|" + r.getFullName());
             }
         }
     }
