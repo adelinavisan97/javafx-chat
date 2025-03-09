@@ -1,7 +1,5 @@
 package com.example.client;
 
-// This class holds the conversation ID and the displayName.
-// The toString() method returns displayName, so ListView will display only the name.
 public class ConversationListItem {
     private String conversationId;
     private String displayName;
@@ -21,7 +19,6 @@ public class ConversationListItem {
 
     @Override
     public String toString() {
-        // Only show the display name in the ListView
-        return displayName;
+        return displayName; // so ListView shows only the display name
     }
 }
