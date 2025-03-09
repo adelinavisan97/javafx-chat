@@ -266,21 +266,50 @@ public class ChatClientApp extends Application {
         }
     }
 
+    /**
+     * Starts a background thread to listen for incoming messages.
+     * If the connection is lost, it attempts to reconnect.
+     */
     private void startReaderThread() {
         Thread readerThread = new Thread(() -> {
-            try {
-                String line;
-                while ((line = in.readLine()) != null) {
-                    final String serverLine = line;
-                    Platform.runLater(() -> handleServerLine(serverLine));
+            while (true) {
+                try {
+                    String line;
+                    while ((line = in.readLine()) != null) {
+                        final String serverLine = line;
+                        Platform.runLater(() -> handleServerLine(serverLine));
+                    }
+                } catch (IOException e) {
+                    showError("Connection lost. Attempting to reconnect...");
+                    attemptReconnect();
                 }
-            } catch (IOException e) {
-                showError("Connection lost: " + e.getMessage());
             }
         });
         readerThread.setDaemon(true);
         readerThread.start();
     }
+
+    /**
+     * Attempts to reconnect to the server if the connection is lost.
+     */
+    private void attemptReconnect() {
+        int maxRetries = 5;
+        int retryDelay = 3000; // 3 seconds between attempts
+        for (int i = 0; i < maxRetries; i++) {
+            try {
+                Thread.sleep(retryDelay);
+                showError("Reconnecting... Attempt " + (i + 1) + "/" + maxRetries);
+                if (connectAndAuthenticate("localhost", 12345, "LOGIN", "", username, "")) {
+                    showAlert("Reconnected successfully!");
+                    return;
+                }
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        showError("Failed to reconnect after multiple attempts.");
+    }
+
 
     private void handleServerLine(String line) {
         String[] parts = line.split("\\|", 3);
@@ -354,6 +383,9 @@ public class ChatClientApp extends Application {
         }
     }
 
+    /**
+     * Sends a text message. If the server is unreachable, retries up to 3 times.
+     */
     private void sendMessage() {
         if (currentConversationId == null) {
             showAlert("No conversation is opened.");
@@ -361,10 +393,23 @@ public class ChatClientApp extends Application {
         }
         String text = inputField.getText().trim();
         if (text.isEmpty()) return;
-        out.println("SEND_MESSAGE|" + currentConversationId + "|" + text);
-        chatArea.appendText("You: " + text + "\n");
-        inputField.clear();
+
+        int retries = 3;
+        while (retries > 0) {
+            try {
+                out.println("SEND_MESSAGE|" + currentConversationId + "|" + text);
+                chatArea.appendText("You: " + text + "\n");
+                inputField.clear();
+                return; // If successful, exit retry loop
+            } catch (Exception e) {
+                showError("Failed to send message. Retrying... (" + retries + " left)");
+                retries--;
+                try { Thread.sleep(2000); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
+            }
+        }
+        showError("Message could not be sent after multiple attempts.");
     }
+
 
     private void sendFile() {
         if (currentConversationId == null) {
