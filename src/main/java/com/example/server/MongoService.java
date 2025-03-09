@@ -3,6 +3,7 @@ package com.example.server;
 import com.mongodb.client.*;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Updates;
+import com.mongodb.client.ClientSession;
 import io.github.cdimascio.dotenv.Dotenv;
 import org.bson.Document;
 import org.bson.conversions.Bson;
@@ -108,15 +109,30 @@ public class MongoService {
     }
 
     // -------------------- Message Storage --------------------
+    /**
+     * Saves a message with a transaction rollback mechanism.
+     */
     public void saveMessage(String conversationId, String sender, String encryptedMessage) {
-        Document msgDoc = new Document("sender", sender)
-                .append("text", encryptedMessage)
-                .append("isFile", false)
-                .append("timestamp", new Date().getTime());
-        Bson filter = Filters.eq("conversationId", conversationId);
-        Bson update = Updates.push("messages", msgDoc);
-        conversationsCollection.updateOne(filter, update);
+        try (ClientSession session = mongoClient.startSession()) {
+            session.startTransaction();
+            try {
+                Document msgDoc = new Document("sender", sender)
+                        .append("text", encryptedMessage)
+                        .append("isFile", false)
+                        .append("timestamp", new Date().getTime());
+
+                Bson filter = Filters.eq("conversationId", conversationId);
+                Bson update = Updates.push("messages", msgDoc);
+
+                conversationsCollection.updateOne(session, filter, update);
+                session.commitTransaction();
+            } catch (Exception e) {
+                session.abortTransaction(); // Rollback on failure
+                e.printStackTrace();
+            }
+        }
     }
+
 
     public List<String> getMessages(String conversationId, String currentUser) {
         List<String> result = new ArrayList<>();
