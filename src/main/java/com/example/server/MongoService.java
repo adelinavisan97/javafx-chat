@@ -14,10 +14,10 @@ import java.util.Date;
 import java.util.List;
 
 public class MongoService {
-    private MongoClient mongoClient;
-    private MongoDatabase database;
-    private MongoCollection<Document> usersCollection;
-    private MongoCollection<Document> conversationsCollection;
+    private final MongoClient mongoClient;
+    private final MongoDatabase database;
+    private final MongoCollection<Document> usersCollection;
+    private final MongoCollection<Document> conversationsCollection;
 
     public MongoService() {
         Dotenv dotenv = Dotenv.configure().load();
@@ -28,6 +28,7 @@ public class MongoService {
         conversationsCollection = database.getCollection("conversations");
     }
 
+    // -------------------- User Authentication --------------------
     public boolean registerUser(String email, String plainPassword, String fullName) {
         email = email.toLowerCase();
         Document existing = usersCollection.find(new Document("email", email)).first();
@@ -37,7 +38,6 @@ public class MongoService {
                 .append("email", email)
                 .append("password", hashed)
                 .append("conversations", new ArrayList<Document>());
-        System.out.println("Registering user: " + userDoc.toJson());
         usersCollection.insertOne(userDoc);
         return true;
     }
@@ -51,10 +51,7 @@ public class MongoService {
 
     public String getFullName(String email) {
         Document userDoc = usersCollection.find(new Document("email", email)).first();
-        if (userDoc != null) {
-            return userDoc.getString("fullName");
-        }
-        return null;
+        return userDoc != null ? userDoc.getString("fullName") : null;
     }
 
     public List<UserRecord> searchUsersByPrefix(String prefix) {
@@ -70,6 +67,7 @@ public class MongoService {
         return results;
     }
 
+    // -------------------- Conversation Management --------------------
     public String createOrGetConversation(String userA, String userB) {
         List<String> sorted = new ArrayList<>();
         sorted.add(userA.toLowerCase());
@@ -84,44 +82,6 @@ public class MongoService {
             conversationsCollection.insertOne(newConv);
         }
         return conversationId;
-    }
-
-    public void saveMessage(String conversationId, String sender, String encryptedMessage) {
-        Document msgDoc = new Document("sender", sender)
-                .append("text", encryptedMessage)
-                .append("timestamp", new Date().getTime());
-        Bson filter = Filters.eq("conversationId", conversationId);
-        Bson update = new Document("$push", new Document("messages", msgDoc));
-        conversationsCollection.updateOne(filter, update);
-    }
-
-    // FILE-SHARING METHODS
-
-    public void saveFileMessage(String conversationId, String sender, String fileName, String fileData) {
-        Document fileMsg = new Document("sender", sender)
-                .append("isFile", true)
-                .append("fileName", fileName)
-                .append("fileData", fileData)
-                .append("timestamp", new Date().getTime());
-        Bson filter = Filters.eq("conversationId", conversationId);
-        Bson update = Updates.push("messages", fileMsg);
-        conversationsCollection.updateOne(filter, update);
-    }
-
-    public String fetchFileBase64(String conversationId, String fileName) {
-        Document conv = conversationsCollection.find(new Document("conversationId", conversationId)).first();
-        if (conv == null) return null;
-        @SuppressWarnings("unchecked")
-        List<Document> messages = (List<Document>) conv.get("messages", List.class);
-        if (messages == null) return null;
-        for (Document msgDoc : messages) {
-            boolean isFile = msgDoc.getBoolean("isFile", false);
-            String storedFileName = msgDoc.getString("fileName");
-            if (isFile && storedFileName != null && storedFileName.equals(fileName)) {
-                return msgDoc.getString("fileData");
-            }
-        }
-        return null;
     }
 
     public void addConversationToUser(String userEmail, String conversationId, String displayName) {
@@ -147,6 +107,17 @@ public class MongoService {
         return result;
     }
 
+    // -------------------- Message Storage --------------------
+    public void saveMessage(String conversationId, String sender, String encryptedMessage) {
+        Document msgDoc = new Document("sender", sender)
+                .append("text", encryptedMessage)
+                .append("isFile", false)
+                .append("timestamp", new Date().getTime());
+        Bson filter = Filters.eq("conversationId", conversationId);
+        Bson update = Updates.push("messages", msgDoc);
+        conversationsCollection.updateOne(filter, update);
+    }
+
     public List<String> getMessages(String conversationId, String currentUser) {
         List<String> result = new ArrayList<>();
         Document conv = conversationsCollection.find(new Document("conversationId", conversationId)).first();
@@ -156,19 +127,27 @@ public class MongoService {
         if (messages == null) return result;
         for (Document msgDoc : messages) {
             boolean isFile = msgDoc.getBoolean("isFile", false);
+            String sender = msgDoc.getString("sender");
+            String text = msgDoc.getString("text"); // Already stored as plain text summary for file messages.
             if (!isFile) {
-                String cipherText = msgDoc.getString("text");
                 try {
-                    String plainText = CryptoUtil.decrypt(cipherText);
-                    if (msgDoc.getString("sender").equalsIgnoreCase(currentUser)) {
+                    String plainText = CryptoUtil.decrypt(text);
+                    if (sender.equalsIgnoreCase(currentUser)) {
                         result.add("You: " + plainText);
                     } else {
-                        String theirName = getFullName(msgDoc.getString("sender"));
-                        if (theirName == null) theirName = msgDoc.getString("sender");
-                        result.add(theirName + ": " + plainText);
+                        String senderName = getFullName(sender);
+                        result.add((senderName != null ? senderName : sender) + ": " + plainText);
                     }
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    // Skip on decryption error
+                }
+            } else {
+                // Use the stored summary text for file messages.
+                if (sender.equalsIgnoreCase(currentUser)) {
+                    result.add("You shared a file: " + msgDoc.getString("fileName"));
+                } else {
+                    String senderName = getFullName(sender);
+                    result.add((senderName != null ? senderName : sender) + " shared a file: " + msgDoc.getString("fileName"));
                 }
             }
         }
@@ -183,14 +162,48 @@ public class MongoService {
         List<Document> messages = (List<Document>) conv.get("messages", List.class);
         if (messages == null) return fileNames;
         for (Document msgDoc : messages) {
-            boolean isFile = msgDoc.getBoolean("isFile", false);
-            if (isFile) {
+            if (msgDoc.getBoolean("isFile", false)) {
                 fileNames.add(msgDoc.getString("fileName"));
             }
         }
         return fileNames;
     }
 
+    // -------------------- File Sharing --------------------
+    public void saveFileMessage(String conversationId,
+                                String senderEmail,
+                                String fileName,
+                                String encryptedBase64,
+                                String senderFullName) {
+        String summary = senderFullName + " shared a file: " + fileName;
+        Document fileMsg = new Document("sender", senderEmail)
+                .append("isFile", true)
+                .append("fileName", fileName)
+                .append("fileData", encryptedBase64)
+                .append("text", summary)
+                .append("timestamp", new Date().getTime());
+        Bson filter = Filters.eq("conversationId", conversationId);
+        Bson update = Updates.push("messages", fileMsg);
+        conversationsCollection.updateOne(filter, update);
+    }
+
+    public String fetchFileBase64(String conversationId, String fileName) {
+        Document conv = conversationsCollection.find(new Document("conversationId", conversationId)).first();
+        if (conv == null) return null;
+        @SuppressWarnings("unchecked")
+        List<Document> messages = (List<Document>) conv.get("messages", List.class);
+        if (messages == null) return null;
+        for (Document msgDoc : messages) {
+            boolean isFile = msgDoc.getBoolean("isFile", false);
+            String storedFileName = msgDoc.getString("fileName");
+            if (isFile && storedFileName != null && storedFileName.equals(fileName)) {
+                return msgDoc.getString("fileData");
+            }
+        }
+        return null;
+    }
+
+    // -------------------- Recipient Utilities --------------------
     public String getRecipientFromConversation(String conversationId, String currentUser) {
         Document conv = conversationsCollection.find(new Document("conversationId", conversationId)).first();
         if (conv == null) return null;
@@ -207,7 +220,7 @@ public class MongoService {
 
     public boolean userExists(String email) {
         Document userDoc = usersCollection.find(new Document("email", email.toLowerCase())).first();
-        return (userDoc != null);
+        return userDoc != null;
     }
 
     public void close() {

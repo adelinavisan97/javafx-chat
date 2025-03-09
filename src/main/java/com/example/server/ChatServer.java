@@ -9,12 +9,12 @@ import java.util.List;
 public class ChatServer {
     private ServerSocket serverSocket;
     private final List<ClientHandler> clients;
-    private MongoService mongoService;
+    private final MongoService mongoService;
 
     public ChatServer(int port) throws IOException {
         serverSocket = new ServerSocket(port);
         clients = Collections.synchronizedList(new ArrayList<>());
-        mongoService = new MongoService(); // connect to Mongo
+        mongoService = new MongoService();
         System.out.println("Server started on port " + port);
     }
 
@@ -26,7 +26,6 @@ public class ChatServer {
         while (true) {
             try {
                 Socket clientSocket = serverSocket.accept();
-                System.out.println("New client connected: " + clientSocket.getInetAddress());
                 ClientHandler handler = new ClientHandler(clientSocket, this);
                 clients.add(handler);
                 new Thread(handler).start();
@@ -36,7 +35,6 @@ public class ChatServer {
         }
     }
 
-    // Find a specific client based on username (email)
     public ClientHandler getClientByUsername(String username) {
         synchronized (clients) {
             for (ClientHandler client : clients) {
@@ -48,10 +46,9 @@ public class ChatServer {
         return null;
     }
 
-    // Remove client if disconnected
     public void removeClient(ClientHandler clientHandler) {
         clients.remove(clientHandler);
-        System.out.println("A client disconnected. Current client count: " + clients.size());
+        System.out.println("Client disconnected. Current client count: " + clients.size());
     }
 
     public static void main(String[] args) {
@@ -65,12 +62,12 @@ public class ChatServer {
 }
 
 class ClientHandler implements Runnable {
-    private Socket socket;
-    private ChatServer server;
+    private final Socket socket;
+    private final ChatServer server;
     private PrintWriter out;
     private BufferedReader in;
-    private String username; // email used for authentication
-    private String fullName; // full name for display
+    private String username;
+    private String fullName;
 
     public ClientHandler(Socket socket, ChatServer server) {
         this.socket = socket;
@@ -91,6 +88,7 @@ class ClientHandler implements Runnable {
                 handleClientMessage(message);
             }
         } catch (IOException e) {
+            // Minimal logging
             e.printStackTrace();
         } finally {
             server.removeClient(this);
@@ -98,12 +96,6 @@ class ClientHandler implements Runnable {
         }
     }
 
-    /**
-     * Handles the authentication flow.
-     * For registration: "REGISTER|<fullName>|<email>|<password>"
-     * For login:        "LOGIN|<email>|<password>"
-     * On success, sends "AUTH_OK|<fullName>"
-     */
     private boolean handleAuth() throws IOException {
         String line = in.readLine();
         if (line == null) return false;
@@ -113,41 +105,46 @@ class ClientHandler implements Runnable {
             return false;
         }
         String command = parts[0].toUpperCase();
-        if (command.equals("REGISTER")) {
+        if ("REGISTER".equals(command)) {
             if (parts.length != 4) {
                 out.println("AUTH_FAIL|Incorrect registration format");
                 return false;
             }
-            String regFullName = parts[1].trim();
-            String email       = parts[2].trim().toLowerCase();
-            String pass        = parts[3].trim();
-            if (server.getMongoService().registerUser(email, pass, regFullName)) {
-                this.username = email;
-                this.fullName = regFullName;
-                out.println("AUTH_OK|" + regFullName);
-                return true;
-            } else {
-                out.println("AUTH_FAIL|Username exists");
-                return false;
-            }
-        } else if (command.equals("LOGIN")) {
+            return handleRegister(parts[1], parts[2], parts[3]);
+        } else if ("LOGIN".equals(command)) {
             if (parts.length != 3) {
                 out.println("AUTH_FAIL|Incorrect login format");
                 return false;
             }
-            String email = parts[1].trim().toLowerCase();
-            String pass  = parts[2].trim();
-            if (server.getMongoService().loginUser(email, pass)) {
-                this.username = email;
-                this.fullName = server.getMongoService().getFullName(email);
-                out.println("AUTH_OK|" + fullName);
-                return true;
-            } else {
-                out.println("AUTH_FAIL|Invalid credentials");
-                return false;
-            }
+            return handleLogin(parts[1], parts[2]);
         } else {
             out.println("AUTH_FAIL|Unknown command");
+            return false;
+        }
+    }
+
+    private boolean handleRegister(String fullNameInput, String email, String password) {
+        email = email.toLowerCase().trim();
+        if (server.getMongoService().registerUser(email, password, fullNameInput)) {
+            this.username = email;
+            this.fullName = fullNameInput;
+            out.println("AUTH_OK|" + this.fullName);
+            return true;
+        } else {
+            out.println("AUTH_FAIL|Username exists");
+            return false;
+        }
+    }
+
+    private boolean handleLogin(String emailInput, String passwordInput) {
+        String email = emailInput.toLowerCase().trim();
+        if (server.getMongoService().loginUser(email, passwordInput)) {
+            this.username = email;
+            this.fullName = server.getMongoService().getFullName(email);
+            out.println("AUTH_OK|" + this.fullName);
+            return true;
+        } else {
+            out.println("AUTH_FAIL|Invalid credentials");
             return false;
         }
     }
@@ -155,34 +152,45 @@ class ClientHandler implements Runnable {
     private void handleClientMessage(String message) {
         String[] parts = message.split("\\|", 4);
         String command = parts[0];
-        if (command.equals("NEW_CHAT")) {
-            handleNewChat(parts);
-        } else if (command.equals("LIST_USER_CONVERSATIONS")) {
-            handleListConversations();
-        } else if (command.equals("SEND_MESSAGE")) {
-            handleSendMessage(parts);
-        } else if (command.equals("GET_MESSAGES")) {
-            handleGetMessages(parts);
-        } else if (command.equals("SEARCH_USERS")) {
-            handleSearchUsers(parts);
-        }
-        // FILE-SHARING COMMANDS
-        else if (command.equals("SEND_FILE")) {
-            handleSendFile(parts);
-        } else if (command.equals("GET_FILE")) {
-            handleGetFile(parts);
+        switch (command) {
+            case "NEW_CHAT":
+                handleNewChat(parts);
+                break;
+            case "LIST_USER_CONVERSATIONS":
+                handleListConversations();
+                break;
+            case "SEND_MESSAGE":
+                handleSendMessage(parts);
+                break;
+            case "GET_MESSAGES":
+                handleGetMessages(parts);
+                break;
+            case "SEARCH_USERS":
+                handleSearchUsers(parts);
+                break;
+            case "SEND_FILE":
+                handleSendFile(parts);
+                break;
+            case "GET_FILE":
+                handleGetFile(parts);
+                break;
+            case "GET_FILES":
+                handleGetFiles(parts);
+                break;
+            default:
+                break;
         }
     }
 
     private void handleNewChat(String[] parts) {
         if (parts.length < 2) return;
-        String recipientEmail = parts[1].toLowerCase();
+        String recipientEmail = parts[1].toLowerCase().trim();
         if (!server.getMongoService().userExists(recipientEmail)) {
             out.println("CHAT_FAIL|UserNotFound");
             return;
         }
         String conversationId = server.getMongoService().createOrGetConversation(username, recipientEmail);
-        String myFullName    = server.getMongoService().getFullName(username);
+        String myFullName = server.getMongoService().getFullName(username);
         String theirFullName = server.getMongoService().getFullName(recipientEmail);
         String myDisplayName = "Conversation with " + (theirFullName != null ? theirFullName : recipientEmail);
         String theirDisplayName = "Conversation with " + (myFullName != null ? myFullName : username);
@@ -197,8 +205,8 @@ class ClientHandler implements Runnable {
 
     private void handleListConversations() {
         List<ConvRef> userConvos = server.getMongoService().getUserConversations(username);
-        for (ConvRef c : userConvos) {
-            out.println("MY_CONVO|" + c.getConversationId() + "|" + c.getDisplayName());
+        for (ConvRef convo : userConvos) {
+            out.println("MY_CONVO|" + convo.getConversationId() + "|" + convo.getDisplayName());
         }
     }
 
@@ -215,7 +223,6 @@ class ClientHandler implements Runnable {
                 recipientHandler.sendMessage("NEW_MESSAGE|" + fullName + "|" + msgContent);
             }
         } catch (Exception ex) {
-            ex.printStackTrace();
             out.println("ERROR|Encryption failed on server side");
         }
     }
@@ -223,44 +230,39 @@ class ClientHandler implements Runnable {
     private void handleGetMessages(String[] parts) {
         if (parts.length < 2) return;
         String conversationId = parts[1];
-        List<String> messages = server.getMongoService().getMessages(conversationId, username);
-        for (String msg : messages) {
+        // Send complete conversation history (file messages are included once)
+        for (String msg : server.getMongoService().getMessages(conversationId, username)) {
             out.println("MESSAGE_HISTORY|" + msg);
-        }
-        // Also send file names from this conversation
-        List<String> fileNames = server.getMongoService().getFileNames(conversationId);
-        for (String file : fileNames) {
-            out.println("NEW_FILE|(existing file)|" + file);
         }
     }
 
     private void handleSearchUsers(String[] parts) {
         if (parts.length < 2) return;
         String prefix = parts[1].toLowerCase();
-        List<UserRecord> results = server.getMongoService().searchUsersByPrefix(prefix);
-        for (UserRecord r : results) {
+        for (UserRecord r : server.getMongoService().searchUsersByPrefix(prefix)) {
             out.println("USER_RESULT|" + r.getEmail() + "|" + r.getFullName());
         }
     }
 
-    // FILE-SHARING COMMANDS
-
+    // ----- File Sharing Commands -----
     private void handleSendFile(String[] parts) {
         if (parts.length < 4) return;
         String conversationId = parts[1];
         String fileName = parts[2];
         String base64Data = parts[3];
         try {
-            // Do NOT encrypt file data (for demonstration purposes)
-            server.getMongoService().saveFileMessage(conversationId, username, fileName, base64Data);
+            String encryptedFileData = CryptoUtil.encrypt(base64Data);
+            // Save file message with summary text: "<SenderFullName> shared a file: <fileName>"
+            server.getMongoService().saveFileMessage(conversationId, username, fileName, encryptedFileData, fullName);
+            // Notify the recipient
             String recipientEmail = server.getMongoService().getRecipientFromConversation(conversationId, username);
             ClientHandler recipientHandler = server.getClientByUsername(recipientEmail);
             if (recipientHandler != null) {
                 recipientHandler.sendMessage("NEW_FILE|" + fullName + "|" + fileName);
             }
+            // No duplicate notification to sender – the sender will see the stored message when reloading.
         } catch (Exception ex) {
-            ex.printStackTrace();
-            out.println("ERROR|File processing failed on server side");
+            out.println("ERROR|File encryption failed");
         }
     }
 
@@ -268,16 +270,28 @@ class ClientHandler implements Runnable {
         if (parts.length < 3) return;
         String conversationId = parts[1];
         String requestedFile = parts[2];
-        String fileData = server.getMongoService().fetchFileBase64(conversationId, requestedFile);
-        if (fileData == null) {
+        String encryptedFileData = server.getMongoService().fetchFileBase64(conversationId, requestedFile);
+        if (encryptedFileData == null) {
             out.println("FILE_DATA|" + requestedFile + "|NOT_FOUND");
         } else {
             try {
-                out.println("FILE_DATA|" + requestedFile + "|" + fileData);
+                // Decrypt the stored file data before sending to the client.
+                String plainBase64 = CryptoUtil.decrypt(encryptedFileData);
+                out.println("FILE_DATA|" + requestedFile + "|" + plainBase64);
             } catch (Exception e) {
                 e.printStackTrace();
                 out.println("FILE_DATA|" + requestedFile + "|ERROR");
             }
+        }
+    }
+
+
+    // New command to get the list of files for a conversation.
+    private void handleGetFiles(String[] parts) {
+        if (parts.length < 2) return;
+        String conversationId = parts[1];
+        for (String file : server.getMongoService().getFileNames(conversationId)) {
+            out.println("FILE_LIST|" + file);
         }
     }
 

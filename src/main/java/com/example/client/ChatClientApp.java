@@ -22,17 +22,13 @@ public class ChatClientApp extends Application {
 
     // Scenes
     private Scene loginScene;
-    private Scene conversationsScene; // listing user’s conversations
-    private Scene chatScene;          // a single conversation’s chat
+    private Scene conversationsScene; // Listing user’s conversations
+    private Scene chatScene;          // A single conversation’s chat (TabPane)
 
-    // For conversation listing
+    // UI Components
     private ListView<ConversationListItem> conversationListView;
-
-    // For chat UI
     private TextArea chatArea;
     private TextField inputField;
-
-    // For files UI (in Files Tab)
     private ListView<String> filesListView;
 
     // Networking
@@ -41,26 +37,23 @@ public class ChatClientApp extends Application {
     private PrintWriter out;
 
     // User Info
-    private String username;    // user's email
-    private String displayName; // user's full name from server
+    private String username;
+    private String displayName;
 
-    // Current conversation
+    // Current conversation ID
     private String currentConversationId;
 
     @Override
     public void start(Stage stage) {
         this.primaryStage = stage;
-
-        // Build Scenes
         loginScene = buildLoginScene();
         conversationsScene = buildConversationsScene();
-
-        // Start with login
         primaryStage.setScene(loginScene);
         primaryStage.setTitle("Chat Login");
         primaryStage.show();
     }
 
+    // -------------------- Scene Builders --------------------
     private Scene buildLoginScene() {
         VBox root = new VBox(10);
         root.setPadding(new Insets(20));
@@ -74,58 +67,6 @@ public class ChatClientApp extends Application {
         buttonBox.setAlignment(Pos.CENTER);
         root.getChildren().addAll(titleLabel, buttonBox);
         return new Scene(root, 400, 300);
-    }
-
-    private Scene buildConversationTabsScene() {
-        TabPane tabPane = new TabPane();
-
-        // Chat Tab
-        Tab chatTab = new Tab("Chat");
-        chatTab.setContent(buildChatUI());
-        chatTab.setClosable(false);
-
-        // Files Tab
-        Tab filesTab = new Tab("Files");
-        filesTab.setContent(buildFilesUI());
-        filesTab.setClosable(false);
-
-        tabPane.getTabs().addAll(chatTab, filesTab);
-        return new Scene(tabPane, 600, 400);
-    }
-
-    private VBox buildChatUI() {
-        VBox root = new VBox(10);
-        root.setPadding(new Insets(10));
-        chatArea = new TextArea();
-        chatArea.setEditable(false);
-        chatArea.setWrapText(true);
-        inputField = new TextField();
-        inputField.setPromptText("Type your message...");
-        Button sendButton = new Button("Send");
-        sendButton.setOnAction(e -> sendMessage());
-        inputField.setOnAction(e -> sendMessage());
-        Button sendFileButton = new Button("Send File");
-        sendFileButton.setOnAction(e -> sendFile());
-        HBox inputBox = new HBox(10, inputField, sendButton, sendFileButton);
-        root.getChildren().addAll(chatArea, inputBox);
-        return root;
-    }
-
-    private Pane buildFilesUI() {
-        VBox root = new VBox(10);
-        root.setPadding(new Insets(10));
-        filesListView = new ListView<>();
-        filesListView.setOnMouseClicked(event -> {
-            if (event.getClickCount() == 2) {
-                String selectedFile = filesListView.getSelectionModel().getSelectedItem();
-                if (selectedFile != null) {
-                    confirmAndDownload(selectedFile);
-                }
-            }
-        });
-        Label instructions = new Label("Double-click a file to download.");
-        root.getChildren().addAll(instructions, filesListView);
-        return root;
     }
 
     private Scene buildConversationsScene() {
@@ -149,18 +90,79 @@ public class ChatClientApp extends Application {
         return new Scene(root, 500, 400);
     }
 
+    private Scene buildConversationTabsScene() {
+        TabPane tabPane = new TabPane();
+        Tab chatTab = new Tab("Chat", buildChatUI());
+        chatTab.setClosable(false);
+        Tab filesTab = new Tab("Files", buildFilesUI());
+        filesTab.setClosable(false);
+        tabPane.getTabs().addAll(chatTab, filesTab);
+        return new Scene(tabPane, 600, 400);
+    }
+
+    /**
+     * Builds the Chat UI with a "Back to Conversations" button.
+     */
+    private VBox buildChatUI() {
+        VBox root = new VBox(10);
+        root.setPadding(new Insets(10));
+
+        // Back button to return to the conversations list
+        Button backButton = new Button("Back to Conversations");
+        backButton.setOnAction(e -> {
+            primaryStage.setScene(conversationsScene);
+            primaryStage.setTitle("Conversations - " + displayName);
+            loadConversationsList();
+        });
+
+        chatArea = new TextArea();
+        chatArea.setEditable(false);
+        chatArea.setWrapText(true);
+
+        inputField = new TextField();
+        inputField.setPromptText("Type your message...");
+
+        Button sendButton = new Button("Send");
+        sendButton.setOnAction(e -> sendMessage());
+        inputField.setOnAction(e -> sendMessage());
+
+        Button sendFileButton = new Button("Send File");
+        sendFileButton.setOnAction(e -> sendFile());
+
+        HBox inputBox = new HBox(10, inputField, sendButton, sendFileButton);
+        root.getChildren().addAll(backButton, chatArea, inputBox);
+        return root;
+    }
+
+    private Pane buildFilesUI() {
+        VBox root = new VBox(10);
+        root.setPadding(new Insets(10));
+        filesListView = new ListView<>();
+        filesListView.setOnMouseClicked(event -> {
+            if (event.getClickCount() == 2) {
+                String selectedFile = filesListView.getSelectionModel().getSelectedItem();
+                if (selectedFile != null) {
+                    confirmAndDownload(selectedFile);
+                }
+            }
+        });
+        Label instructions = new Label("Double-click a file to download.");
+        root.getChildren().addAll(instructions, filesListView);
+        return root;
+    }
+
+    // -------------------- Event Handlers --------------------
     private void showNewChatDialog() {
         TextInputDialog dialog = new TextInputDialog();
         dialog.setTitle("New Chat");
         dialog.setHeaderText("Enter the email of the user you want to chat with:");
         dialog.setContentText("Email:");
         Optional<String> result = dialog.showAndWait();
-        if (result.isPresent()) {
-            String otherEmail = result.get().trim();
-            if (!otherEmail.isEmpty()) {
-                out.println("NEW_CHAT|" + otherEmail);
+        result.ifPresent(otherEmail -> {
+            if (!otherEmail.trim().isEmpty()) {
+                out.println("NEW_CHAT|" + otherEmail.trim());
             }
-        }
+        });
     }
 
     private void openSelectedConversation() {
@@ -174,6 +176,8 @@ public class ChatClientApp extends Application {
         primaryStage.setScene(convScene);
         primaryStage.setTitle(selectedItem.getDisplayName());
         out.println("GET_MESSAGES|" + currentConversationId);
+        // Send a command to fetch files as well.
+        out.println("GET_FILES|" + currentConversationId);
     }
 
     private void loadConversationsList() {
@@ -183,13 +187,9 @@ public class ChatClientApp extends Application {
 
     private void handleLogin() {
         String email = askForCredential("Email:", "john@example.com");
-        if (email == null || email.isBlank()) {
-            showAlert("No email provided.");
-            return;
-        }
         String password = askForPassword("Enter Password:");
-        if (password == null || password.isBlank()) {
-            showAlert("No password provided.");
+        if (email == null || email.isBlank() || password == null || password.isBlank()) {
+            showAlert("No email or password provided.");
             return;
         }
         if (connectAndAuthenticate("localhost", 12345, "LOGIN", "", email, password)) {
@@ -224,7 +224,7 @@ public class ChatClientApp extends Application {
             if (in  != null) in.close();
             if (socket != null && !socket.isClosed()) socket.close();
         } catch (IOException ex) {
-            ex.printStackTrace();
+            // Silent close
         }
         username = null;
         displayName = null;
@@ -239,7 +239,7 @@ public class ChatClientApp extends Application {
             socket = new Socket(host, port);
             in  = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             out = new PrintWriter(socket.getOutputStream(), true);
-            if (authMode.equals("REGISTER")) {
+            if ("REGISTER".equals(authMode)) {
                 out.println("REGISTER|" + fullName + "|" + userOrEmail + "|" + pass);
                 username = userOrEmail;
             } else {
@@ -248,23 +248,19 @@ public class ChatClientApp extends Application {
             }
             String response = in.readLine();
             if (response == null) {
-                System.err.println("Server closed connection unexpectedly.");
                 return false;
             }
             if (response.startsWith("AUTH_OK")) {
                 String[] parts = response.split("\\|", 2);
                 if (parts.length == 2) {
                     displayName = parts[1];
-                    System.out.println("Authentication successful! Display Name: " + displayName);
                 }
                 startReaderThread();
                 return true;
             } else {
-                System.err.println("Authentication failed: " + response);
                 return false;
             }
         } catch (IOException e) {
-            e.printStackTrace();
             showError("Could not connect to server: " + e.getMessage());
             return false;
         }
@@ -279,7 +275,6 @@ public class ChatClientApp extends Application {
                     Platform.runLater(() -> handleServerLine(serverLine));
                 }
             } catch (IOException e) {
-                e.printStackTrace();
                 showError("Connection lost: " + e.getMessage());
             }
         });
@@ -288,11 +283,10 @@ public class ChatClientApp extends Application {
     }
 
     private void handleServerLine(String line) {
-        System.out.println("Server => " + line);
         String[] parts = line.split("\\|", 3);
         String command = parts[0];
         switch (command) {
-            case "MY_CONVO": {
+            case "MY_CONVO":
                 if (parts.length >= 3) {
                     String convId = parts[1];
                     String dispName = parts[2];
@@ -300,39 +294,34 @@ public class ChatClientApp extends Application {
                     conversationListView.getItems().add(item);
                 }
                 break;
-            }
-            case "MESSAGE_HISTORY": {
+            case "MESSAGE_HISTORY":
                 if (parts.length >= 2 && chatArea != null) {
-                    String lineOfHistory = parts[1];
-                    if (lineOfHistory.startsWith("(FILE)")) {
-                        String fname = lineOfHistory.substring("(FILE)".length()).trim();
-                        filesListView.getItems().add(fname);
-                    } else {
-                        chatArea.appendText(lineOfHistory + "\n");
+                    chatArea.appendText(parts[1] + "\n");
+                }
+                break;
+            case "NEW_MESSAGE":
+                if (parts.length == 3 && chatArea != null) {
+                    chatArea.appendText(parts[1] + ": " + parts[2] + "\n");
+                }
+                break;
+            case "NEW_FILE":
+                if (parts.length == 3) {
+                    // Display the file notification.
+                    chatArea.appendText(parts[1] + " shared a file: " + parts[2] + "\n");
+                    if (!filesListView.getItems().contains(parts[2])) {
+                        filesListView.getItems().add(parts[2]);
                     }
                 }
                 break;
-            }
-            case "NEW_MESSAGE": {
-                if (parts.length == 3 && chatArea != null) {
-                    String senderName = parts[1];
-                    String plainText = parts[2];
-                    chatArea.appendText(senderName + ": " + plainText + "\n");
-                }
-                break;
-            }
-            case "NEW_FILE": {
-                if (parts.length == 3) {
-                    String senderName = parts[1];
-                    String fname = parts[2];
-                    chatArea.appendText(senderName + " sent a file: " + fname + "\n");
+            case "FILE_LIST":
+                if (parts.length == 2) {
+                    String fname = parts[1];
                     if (!filesListView.getItems().contains(fname)) {
                         filesListView.getItems().add(fname);
                     }
                 }
                 break;
-            }
-            case "FILE_DATA": {
+            case "FILE_DATA":
                 if (parts.length == 3) {
                     String fname = parts[1];
                     String data = parts[2];
@@ -351,22 +340,15 @@ public class ChatClientApp extends Application {
                                 Files.write(saveLocation.toPath(), fileBytes);
                                 showAlert("File saved to: " + saveLocation.getAbsolutePath());
                             }
-                        } catch (IllegalArgumentException e) {
-                            e.printStackTrace();
-                            showAlert("Base64 decoding error for file: " + fname);
-                        } catch (IOException ex) {
-                            ex.printStackTrace();
-                            showAlert("Error saving file: " + ex.getMessage());
+                        } catch (Exception e) {
+                            showAlert("Error saving file: " + e.getMessage());
                         }
                     }
                 }
                 break;
-            }
-            case "CHAT_STARTED": {
-                // Optionally refresh conversation list
+            case "CHAT_STARTED":
                 loadConversationsList();
                 break;
-            }
             default:
                 break;
         }
@@ -398,11 +380,8 @@ public class ChatClientApp extends Application {
             String base64Data = Base64.getEncoder().encodeToString(fileBytes);
             String filename = file.getName();
             out.println("SEND_FILE|" + currentConversationId + "|" + filename + "|" + base64Data);
-            // Log a message in chat for record
-            out.println("SEND_MESSAGE|" + currentConversationId + "|" + "File shared: " + filename);
-            chatArea.appendText("You: File shared: " + filename + "\n");
+            chatArea.appendText("You: Shared a file: " + filename + "\n");
         } catch (IOException ex) {
-            ex.printStackTrace();
             showAlert("Error reading file: " + ex.getMessage());
         }
     }
@@ -418,22 +397,7 @@ public class ChatClientApp extends Application {
         }
     }
 
-    private void downloadFile() {
-        if (currentConversationId == null) {
-            showAlert("No conversation is opened.");
-            return;
-        }
-        TextInputDialog dialog = new TextInputDialog("document.pdf");
-        dialog.setTitle("Download File");
-        dialog.setHeaderText("Enter the exact filename to download:");
-        dialog.setContentText("Filename:");
-        Optional<String> result = dialog.showAndWait();
-        if (result.isEmpty()) return;
-        String filename = result.get().trim();
-        if (filename.isEmpty()) return;
-        out.println("GET_FILE|" + currentConversationId + "|" + filename);
-    }
-
+    // -------------------- Utility Methods --------------------
     private String askForCredential(String label, String defaultVal) {
         TextInputDialog dialog = new TextInputDialog(defaultVal);
         dialog.setTitle("Enter " + label);
@@ -458,12 +422,7 @@ public class ChatClientApp extends Application {
         grid.add(new Label("Password:"), 0, 0);
         grid.add(passwordField, 1, 0);
         dialog.getDialogPane().setContent(grid);
-        dialog.setResultConverter(dialogButton -> {
-            if (dialogButton == okButtonType) {
-                return passwordField.getText();
-            }
-            return null;
-        });
+        dialog.setResultConverter(dialogButton -> dialogButton == okButtonType ? passwordField.getText() : null);
         Optional<String> result = dialog.showAndWait();
         return result.orElse(null);
     }
@@ -511,12 +470,11 @@ public class ChatClientApp extends Application {
         grid.add(visiblePasswordField, 1, 2);
         grid.add(showPasswordCheckBox, 1, 3);
         dialog.getDialogPane().setContent(grid);
-        dialog.setResultConverter(dialogButton -> {
-            if (dialogButton == registerButtonType) {
-                return new RegistrationData(nameField.getText(), emailField.getText(), passwordField.getText());
-            }
-            return null;
-        });
+        dialog.setResultConverter(dialogButton ->
+                dialogButton == registerButtonType
+                        ? new RegistrationData(nameField.getText(), emailField.getText(), passwordField.getText())
+                        : null
+        );
         Optional<RegistrationData> result = dialog.showAndWait();
         return result.orElse(null);
     }
@@ -542,9 +500,7 @@ public class ChatClientApp extends Application {
         super.stop();
         if (out != null) out.close();
         if (in != null) in.close();
-        if (socket != null && !socket.isClosed()) {
-            socket.close();
-        }
+        if (socket != null && !socket.isClosed()) socket.close();
     }
 
     public static void main(String[] args) {
