@@ -192,7 +192,7 @@ public class ChatClientApp extends Application {
             showAlert("No email or password provided.");
             return;
         }
-        if (connectAndAuthenticate("localhost", 12345, "LOGIN", "", email, password)) {
+        if (connectAndAuthenticate("206.189.115.143", 12345, "LOGIN", "", email, password)) {
             username = email;
             primaryStage.setScene(conversationsScene);
             primaryStage.setTitle("Conversations - " + displayName);
