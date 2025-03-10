@@ -208,7 +208,7 @@ public class ChatClientApp extends Application {
             showAlert("Registration canceled.");
             return;
         }
-        if (connectAndAuthenticate("localhost", 12345, "REGISTER", regData.getFullName(), regData.getEmail(), regData.getPassword())) {
+        if (connectAndAuthenticate("206.189.115.143", 12345, "REGISTER", regData.getFullName(), regData.getEmail(), regData.getPassword())) {
             username = regData.getEmail();
             primaryStage.setScene(conversationsScene);
             primaryStage.setTitle("Conversations - " + displayName);
@@ -299,7 +299,7 @@ public class ChatClientApp extends Application {
             try {
                 Thread.sleep(retryDelay);
                 showError("Reconnecting... Attempt " + (i + 1) + "/" + maxRetries);
-                if (connectAndAuthenticate("localhost", 12345, "LOGIN", "", username, "")) {
+                if (connectAndAuthenticate("206.189.115.143", 12345, "LOGIN", "", username, "")) {
                     showAlert("Reconnected successfully!");
                     return;
                 }
