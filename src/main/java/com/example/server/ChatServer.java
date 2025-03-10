@@ -88,8 +88,7 @@ class ClientHandler implements Runnable {
                 handleClientMessage(message);
             }
         } catch (IOException e) {
-            // Minimal logging
-            e.printStackTrace();
+            System.err.println("Error: Connection issue with client " + username);
         } finally {
             server.removeClient(this);
             closeConnections();

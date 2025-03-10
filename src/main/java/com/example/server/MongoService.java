@@ -155,7 +155,7 @@ public class MongoService {
                         result.add((senderName != null ? senderName : sender) + ": " + plainText);
                     }
                 } catch (Exception e) {
-                    // Skip on decryption error
+                    result.add("ERROR: Message could not be decrypted.");
                 }
             } else {
                 // Use the stored summary text for file messages.

@@ -186,7 +186,7 @@ public class ChatClientApp extends Application {
     }
 
     private void handleLogin() {
-        String email = askForCredential("Email:", "");
+        String email = askForCredential("Email", "");
         String password = askForPassword("Enter Password:");
         if (email == null || email.isBlank() || password == null || password.isBlank()) {
             showAlert("No email or password provided.");
