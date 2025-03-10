@@ -7,7 +7,6 @@ import java.util.Base64;
 
 public class CryptoUtil {
     private static final String ALGORITHM = "AES";
-    // For demonstration, a fixed key is used. In production, read it securely (e.g., from a .env file).
     private static final byte[] keyBytes = "1234567890123456".getBytes(StandardCharsets.UTF_8);
     private static final SecretKeySpec secretKey = new SecretKeySpec(keyBytes, ALGORITHM);
 
